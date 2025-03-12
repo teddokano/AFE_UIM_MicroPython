@@ -65,8 +65,6 @@ class NAFE13388( AFE_base, SPI_target ):
 		self.coeff_microvolt	= [ 0 ] * 16
 		
 		self.logical_channel	= [
-									# self.logical_ch_config( 0, [ 0x1150, 0x00AC, 0x1400, 0x0000 ] ),
-									# self.logical_ch_config( 1, [ 0x3350, 0x00A4, 0x1400, 0x3060 ] ),
 									self.logical_ch_config( 0, [ 0x1110, 0x0084, 0x2900, 0x0000 ] ),
 									self.logical_ch_config( 1, [ 0x2210, 0x0084, 0x2900, 0x0000 ] ),
 									]
@@ -206,19 +204,31 @@ class NAFE13388( AFE_base, SPI_target ):
 				self.write_r16( k, v )
 			sleep( WAIT )
 
-	def reset( self, hardware_reset = true ):
+	def reset( self, hardware_reset = True ):
 		"""
 		Reset procedure
 		"""
 		
 		if hardware_reset:
 			self.reset_pin.value( 0 )
-			sleep( WAIT )
+			sleep_ms( 1 )
 			self.reset_pin.value( 1 )
 		else:
 			self.write_r16( 0x0014 )
-			sleep( WAIT )
+	
+		retry	= 10
+	
+		while retry:
+			sleep_ms( 3 )
+			
+			if self.read_r16( 0x31 ) & (0x1 << 13):
+				return;
+				
+			print( "NAFE13388 couldn't get ready. Check power supply or pin conections\r\n" );
 
+			while True:
+				pass
+	
 	def dump( self, list ):
 		"""
 		Register dump
