@@ -74,39 +74,54 @@ class NAFE13388( AFE_base, SPI_target ):
 		self.ch		= [ 0 ] * self.num_logcal_ch
 		self.done	= False
 		
-	def periodic_measurement_start( self ):
-		"""
-		AFE periodic operation starter
-		"""
-		tim0 = Timer( MikanUtil.get_timer_id( 0 ) )
-		tim0.init( period= 100, callback = self.tim_cb )
+	def reg( self, reg, value = None ):
+		reg	= self.REG_DICT[ reg ] if type( reg ) != int else reg
 
-	def sch_cb( self, _ ):
-		"""
-		AFE periodic operation callback via tim_cb()
-		"""
-		ch_start	= (self.cb_count + 1) % 2
-		ch_read		= self.cb_count % 2
+		bit_width	= 24
 
-		# read data
-		self.ch[ ch_read ]	= self.read_r24( 0x2040 + ch_read )	* self.coeff_microvolt[ ch_read ]
+		if (((reg >> 4) & 0xF) < 0x4) or (((reg >> 4) & 0xF) == 0x7):
+			bit_width	= 16
 
-		# start ADC operation
-		self.write_r16( 0x0000 + ch_start )
-		self.write_r16( 0x2000 )
-		
-		self.cb_count	+= 1
-		
-		if self.cb_count % 2:
-			self.done	= True
+		if (((reg >> 4) & 0xF) < 0x2):
+			bit_width	= 0
+
+		if (value is not None) or (bit_width == 0):
+			if bit_width == 24:
+				self.write_r24( reg, value )
+			else:
+				self.write_r16( reg, value )
+		else:
+			if bit_width == 24:
+				return self.read_r24( reg, value )
+			else:
+				return self.read_r16( reg, value )
 	
-	def tim_cb( self, tim_obj ):
-		"""
-		timer callback
-		"""
-		schedule( self.sch_cb, 0 )
-
 	def	write_r16( self, reg, val = None ):
+		"""
+		writing 16bit register
+	
+		Parameters
+		----------
+		reg : int
+			Register address/pointer.
+		val : int
+			16bit data
+			
+		"""
+		reg		<<= 1
+	
+		regH	= reg >> 8 & 0xFF
+		regL	= reg & 0xFF
+
+		if val is None:
+			self.send( [ regH, regL ] )
+		else:
+			valH	= val >> 16 & 0xFF
+			valM	= val >>  8 & 0xFF
+			valL	= val       & 0xFF
+			self.send( [ regH, regL, valH, valM, valL ] )
+
+	def	write_r24( self, reg, val = None ):
 		"""
 		writing 16bit register
 	
@@ -189,11 +204,6 @@ class NAFE13388( AFE_base, SPI_target ):
 		"""
 		reg_init	= [
 						{	0x0010: None, 
-							0x002A: 0x0000,
-							0x002B: 0x0000,
-							0x002C: 0x0000,
-							0x002F: 0x0000,
-							0x0029: 0x0000,
 							},
 						{	0x0030: 0x0010, 
 							},
@@ -204,7 +214,7 @@ class NAFE13388( AFE_base, SPI_target ):
 				self.write_r16( k, v )
 			sleep( WAIT )
 
-	def reset( self, hardware_reset = True ):
+	def reset( self, hardware_reset = False ):
 		"""
 		Reset procedure
 		"""
@@ -214,14 +224,14 @@ class NAFE13388( AFE_base, SPI_target ):
 			sleep_ms( 1 )
 			self.reset_pin.value( 1 )
 		else:
-			self.write_r16( 0x0014 )
+			self.reg( "CMD_RESET" )
 	
 		retry	= 10
 	
 		while retry:
 			sleep_ms( 3 )
 			
-			if self.read_r16( 0x31 ) & (0x1 << 13):
+			if self.reg( "SYS_STATUS0" ) & (0x1 << 13):
 				return;
 			
 			retry	-= 1
@@ -261,7 +271,8 @@ class NAFE13388( AFE_base, SPI_target ):
 				print( "0x{:04X} = {:04X}".format( r, self.read_r16( r ) ) )
 			else:
 				print( "" )
-		self.write_r16( 0x0000 + logical_channel )
+				
+		self.reg( self.REG_DICT["CMD_CH0"] + logical_channel )
 
 		for r, v in zip( self.ch_cnfg_reg, list ):
 			self.write_r16( r, v )
@@ -269,7 +280,7 @@ class NAFE13388( AFE_base, SPI_target ):
 		
 		mask	= 1
 		bits	= self.read_r16( 0x24 ) | mask << logical_channel
-		self.write_r16( 0x24, bits )
+		self.reg( "CH_CONFIG4", bits )
 		
 		print( f"bits = {bits}" )
 		print( f"self.read_r16( 0x24 ) = {self.read_r16( 0x24 )}" )
@@ -305,15 +316,15 @@ class NAFE13388( AFE_base, SPI_target ):
 
 		"""
 		if ch is not None:
-			self.write_r16( 0x0000 + ch )
-			self.write_r16( 0x2000 )
+			self.reg( REG_DICT["CMD_CH0"] + ch )
+			self.reg( "CMD_SS" )
 #			sleep_ms( 100 )
 			sleep_ms( 50 )
-			return self.read_r24( 0x2040 + ch ) * self.coeff_microvolt[ ch ]
+			return self.reg( REG_DICT["CH_DATA0"] + ch ) * self.coeff_microvolt[ ch ]
 		
 		values	= []
 
-		command	= 0x2004
+		command	= "CMD_MS"
 
 		for i in range( self.num_logcal_ch ):
 			self.write_r16( command )
@@ -324,7 +335,7 @@ class NAFE13388( AFE_base, SPI_target ):
 				sleep_us( 10 )
 			"""
 			sleep_ms( 10 )
-			values	+= [ self.read_r24( 0x2040 + i ) ]
+			values	+= [ self.read_r24( REG_DICT["CH_DATA0"] + i ) ]
 		
 		print( values )
 
@@ -364,7 +375,165 @@ class NAFE13388( AFE_base, SPI_target ):
 
 		"""
 		return self.read_r16( 0x34, signed = True ) / 64
-		
+
+	REG_DICT	= {
+		"CMD_CH0":			0x0000,
+		"CMD_CH1":			0x0001,
+		"CMD_CH2":			0x0002,
+		"CMD_CH3":			0x0003,
+		"CMD_CH4":			0x0004,
+		"CMD_CH5":			0x0005,
+		"CMD_CH6":			0x0006,
+		"CMD_CH7":			0x0007,
+		"CMD_CH8":			0x0008,
+		"CMD_CH9":			0x0009,
+		"CMD_CH10":			0x000A,
+		"CMD_CH11":			0x000B,
+		"CMD_CH12":			0x000C,
+		"CMD_CH13":			0x000D,
+		"CMD_CH14":			0x000E,
+		"CMD_CH15":			0x000F,
+		"CMD_ABORT":		0x0010,
+		"CMD_END":			0x0011,
+		"CMD_CLEAR_ALARM":	0x0012,
+		"CMD_CLEAR_DATA":	0x0013,
+		"CMD_RESET":		0x0014,
+		"CMD_CLEAR_REG":	0x0015,
+		"CMD_RELOAD":		0x0016,
+		"TBD":				0x0017,
+		"CMD_SS":			0x2000,
+		"CMD_SC":			0x2001,
+		"CMD_MM":			0x2002,
+		"CMD_MC":			0x2003,
+		"CMD_MS":			0x2004,
+		"CMD_BURST_DATA":		0x2005,
+		"CMD_CALC_CRC_CONFG":	0x2006,
+		"CMD_CALC_CRC_COEF":	0x2007,
+		"CMD_CALC_CRC_FAC":		0x2008,
+		"CH_CONFIG0":		0x20,
+		"CH_CONFIG1":		0x21,
+		"CH_CONFIG2":		0x22,
+		"CH_CONFIG3":		0x23,
+		"CH_CONFIG4":		0x24,
+		"CRC_CONF_REGS":	0x25,
+		"CRC_COEF_REGS":	0x26,
+		"CRC_TRIM_REGS":	0x27,
+		"GPI_DATA":	0x29,
+		"GPIO_CONFIG0":		0x2A,
+		"GPIO_CONFIG1":		0x2B,
+		"GPIO_CONFIG2":		0x2C,
+		"GPI_EDGE_POS":		0x2D,
+		"GPI_EDGE_NEG":		0x2E,
+		"GPO_DATA":			0x2F,
+		"SYS_CONFIG0":		0x30,
+		"SYS_STATUS0":		0x31,
+		"GLOBAL_ALARM_ENABLE":	0x32,
+		"GLOBAL_ALARM_INTERRUPT":	0x33,
+		"DIE_TEMP":			0x34,
+		"CH_STATUS0":		0x35,
+		"CH_STATUS1":		0x36,
+		"THRS_TEMP":		0x37,
+		"CH_DATA0":			0x40,
+		"CH_DATA1":			0x41,
+		"CH_DATA2":			0x42,
+		"CH_DATA3":			0x43,
+		"CH_DATA4":			0x44,
+		"CH_DATA5":			0x45,
+		"CH_DATA6":			0x46,
+		"CH_DATA7":			0x47,
+		"CH_DATA8":			0x48,
+		"CH_DATA9":			0x4A,
+		"CH_DATA10":		0x4B,
+		"CH_DATA11":		0x4C,
+		"CH_DATA13":		0x4D,
+		"CH_DATA14":		0x4E,
+		"CH_DATA15":		0x4F,
+		"CH_CONFIG5_0":		0x50,
+		"CH_CONFIG5_1":		0x51,
+		"CH_CONFIG5_2":		0x52,
+		"CH_CONFIG5_3":		0x53,
+		"CH_CONFIG5_4":		0x54,
+		"CH_CONFIG5_5":		0x55,
+		"CH_CONFIG5_6":		0x56,
+		"CH_CONFIG5_7":		0x57,
+		"CH_CONFIG5_8":		0x58,
+		"CH_CONFIG5_9":		0x59,
+		"CH_CONFIG5_10":	0x5A,
+		"CH_CONFIG5_11":	0x5B,
+		"CH_CONFIG5_12":	0x5C,
+		"CH_CONFIG5_13":	0x5D,
+		"CH_CONFIG5_14":	0x5E,
+		"CH_CONFIG5_15":	0x5F,
+		"CH_CONFIG6_0":		0x60,
+		"CH_CONFIG6_1":		0x61,
+		"CH_CONFIG6_2":		0x62,
+		"CH_CONFIG6_3":		0x63,
+		"CH_CONFIG6_4":		0x64,
+		"CH_CONFIG6_5":		0x65,
+		"CH_CONFIG6_6":		0x66,
+		"CH_CONFIG6_7":		0x67,
+		"CH_CONFIG6_8":		0x68,
+		"CH_CONFIG6_9":		0x69,
+		"CH_CONFIG6_10":	0x6A,
+		"CH_CONFIG6_11":	0x6B,
+		"CH_CONFIG6_12":	0x6C,
+		"CH_CONFIG6_13":	0x6D,
+		"CH_CONFIG6_14":	0x6E,
+		"CH_CONFIG6_15":	0x6F,
+		"PN2":				0x7C,
+		"PN1":				0x7D,
+		"PN0":				0x7E,
+		"CRC_TRIM_INT":		0x7F,
+		"GAIN_COEFF0":		0x80,
+		"GAIN_COEFF1":		0x81,
+		"GAIN_COEFF2":		0x82,
+		"GAIN_COEFF3":		0x83,
+		"GAIN_COEFF4":		0x84,
+		"GAIN_COEFF5":		0x85,
+		"GAIN_COEFF6":		0x86,
+		"GAIN_COEFF7":		0x87,
+		"GAIN_COEFF8":		0x88,
+		"GAIN_COEFF9":		0x89,
+		"GAIN_COEFF10":		0x8A,
+		"GAIN_COEFF11":		0x8B,
+		"GAIN_COEFF12":		0x8C,
+		"GAIN_COEFF13":		0x8D,
+		"GAIN_COEFF14":		0x8E,
+		"GAIN_COEFF15":		0x8F,
+		"OFFSET_COEFF0":	0x90,
+		"OFFSET_COEFF1":	0x91,
+		"OFFSET_COEFF2":	0x92,
+		"OFFSET_COEFF3":	0x93,
+		"OFFSET_COEFF4":	0x94,
+		"OFFSET_COEFF5":	0x95,
+		"OFFSET_COEFF6":	0x96,
+		"OFFSET_COEFF7":	0x97,
+		"OFFSET_COEFF8":	0x98,
+		"OFFSET_COEFF9":	0x99,
+		"OFFSET_COEFF10":	0x9A,
+		"OFFSET_COEFF11":	0x9B,
+		"OFFSET_COEFF12":	0x9C,
+		"OFFSET_COEFF13":	0x9D,
+		"OFFSET_COEFF14":	0x9E,
+		"OFFSET_COEFF15":	0x9F,
+		"OPT_COEF0":		0xA0,
+		"OPT_COEF1":		0xA1,
+		"OPT_COEF2":		0xA2,
+		"OPT_COEF3":		0xA3,
+		"OPT_COEF4":		0xA4,
+		"OPT_COEF5":		0xA5,
+		"OPT_COEF6":		0xA6,
+		"OPT_COEF7":		0xA7,
+		"OPT_COEF8":		0xA8,
+		"OPT_COEF9":		0xA9,
+		"OPT_COEF10":		0xAA,
+		"OPT_COEF11":		0xAB,
+		"OPT_COEF12":		0xAC,
+		"OPT_COEF13":		0xAD,
+		"SERIAL1":			0xAE,
+		"SERIAL0":			0xAF,
+	}
+
 def main():
 	spi	= SPI( 0, 1000_000, cs = 0, phase = 1 )
 
@@ -373,15 +542,8 @@ def main():
 	
 	count	= 0
 
-	afe.periodic_measurement_start()
-
 	while True:
-		if afe.done:
-			afe.done	= False
-#			print( f"{count},  {afe.ch[ 0 ]} μV,  {afe.ch[ 1 ]} μV" )
-			print( f"{afe.ch[ 0 ]:.3f},  {afe.ch[ 1 ]:.3f}" )
-#			print( f"{afe.ch[ 0 ]},  {afe.ch[ 1 ]}" )
-			count	+= 1
+		count	+= 1
 
 if __name__ == "__main__":
 	main()
