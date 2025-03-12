@@ -223,11 +223,13 @@ class NAFE13388( AFE_base, SPI_target ):
 			
 			if self.read_r16( 0x31 ) & (0x1 << 13):
 				return;
-				
-			print( "NAFE13388 couldn't get ready. Check power supply or pin conections\r\n" );
+			
+			retry	-= 1
+			
+		print( "NAFE13388 couldn't get ready. Check power supply or pin conections\r\n" );
 
-			while True:
-				pass
+		while True:
+			pass
 	
 	def dump( self, list ):
 		"""
