@@ -17,17 +17,19 @@ def main():
 	sleep_ms( 250 )	#	wait for first DIE_TEMP register update
 	afe.dump( [ 0x7C, 0x7D, 0x7E, 0xAE, 0xAF, 0x34, 0x37, None, 0x30, 0x31 ] )
 	
+	print( f"temp = {afe.die_temp()}℃" )
+
 	count	= 0
 
 	sleep(0.5)
-	afe.logical_ch_config( 0, [ 0x1710, 0x007C, 0x4E00, 0x0000 ] ),
-	afe.logical_ch_config( 1, [ 0x2710, 0x007C, 0x4E00, 0x0000 ] ),
+	afe.logical_ch_config( 0, [ 0x1710, 0x00BC, 0x4C00, 0x0000 ] ),
+	afe.logical_ch_config( 1, [ 0x7710, 0x00BC, 0x4C00, 0x0000 ] ),
 
 	data	= [ 0 ] * 2
 
 	while True:
-		data[ 0 ]	= afe.measure( 0 )
-		data[ 1 ]	= afe.measure( 1 )
+		data[ 0 ]	= afe.read_V( 0 )
+		data[ 1 ]	= afe.read_V( 1 )
 		
 		print( f"read data {data[ 0 ]}, {data[ 1 ]}" )
 
@@ -45,9 +47,17 @@ class NAFE13388( AFE_base, SPI_target ):
 	This class enables to get its measured voltage
 	
 	"""
-	ch_cnfg_reg	= [ 0x0020, 0x0021, 0x0022, 0x0023 ]
-	pga_gain	= [ 0.2, 0.4, 0.8, 1, 2, 4, 8, 16 ]
-
+	ch_cnfg_reg	= ( 0x0020, 0x0021, 0x0022, 0x0023 )
+	pga_gain	= ( 0.2, 0.4, 0.8, 1, 2, 4, 8, 16 )
+	data_rates	= (	   288000, 192000, 144000, 96000, 72000, 48000, 36000, 24000, 
+						18000,  12000,   9000,  6000,  4500,  3000,  2250,  1125, 
+						562.5,    400,    300,   200,   100,    60,    50,    30, 
+							25,     20,     15,    10,   7.5, 	)
+	delays		= (		0,   2,   4,   6,   8,  10,   12,  14, 
+						16,  18,  20,  28,  38,  40,   42,  56, 
+						64,  76,  90, 128, 154, 178, 204, 224, 
+					   256, 358, 512, 716, 1024, 1664, 3276, 7680, 19200, 23040 )
+	delay_accuracy	= 1.1
 	REG_DICT	= {
 		"CMD_CH0":			0x0000,
 		"CMD_CH1":			0x0001,
@@ -90,7 +100,7 @@ class NAFE13388( AFE_base, SPI_target ):
 		"CRC_CONF_REGS":	0x25,
 		"CRC_COEF_REGS":	0x26,
 		"CRC_TRIM_REGS":	0x27,
-		"GPI_DATA":	0x29,
+		"GPI_DATA":			0x29,
 		"GPIO_CONFIG0":		0x2A,
 		"GPIO_CONFIG1":		0x2B,
 		"GPIO_CONFIG2":		0x2C,
@@ -99,7 +109,7 @@ class NAFE13388( AFE_base, SPI_target ):
 		"GPO_DATA":			0x2F,
 		"SYS_CONFIG0":		0x30,
 		"SYS_STATUS0":		0x31,
-		"GLOBAL_ALARM_ENABLE":	0x32,
+		"GLOBAL_ALARM_ENABLE":		0x32,
 		"GLOBAL_ALARM_INTERRUPT":	0x33,
 		"DIE_TEMP":			0x34,
 		"CH_STATUS0":		0x35,
@@ -244,6 +254,7 @@ class NAFE13388( AFE_base, SPI_target ):
 		self.reset()
 		
 		self.coeff_microvolt	= [ 0 ] * 16
+		self.channel_delay		= [ 0 ] * 16
 		
 
 	def boot( self ):
@@ -319,8 +330,15 @@ class NAFE13388( AFE_base, SPI_target ):
 		bits	= self.reg( "CH_CONFIG4" ) | mask << logical_channel
 		self.reg( "CH_CONFIG4", bits )
 		
-		print( f"bits = {bits}" )
+		self.num_logcal_ch	= 0
+		
+		for i in range( 16 ):
+			if bits & (mask << i):
+				self.num_logcal_ch	+= 1
+		
+		print( f"bits                     = {bits}" )
 		print( f"self.reg( 'CH_CONFIG4' ) = {self.reg( 'CH_CONFIG4' )}" )
+		print( f"self.num_logcal_ch       = {self.num_logcal_ch}" )
 		
 		cc0	= list[ 0 ]
 		
@@ -328,15 +346,32 @@ class NAFE13388( AFE_base, SPI_target ):
 			self.coeff_microvolt[ logical_channel ]	= ((10.0 / (1 << 24)) / self.pga_gain[ (cc0 >> 5) & 0x7 ]) * 1e6
 		else:
 			self.coeff_microvolt[ logical_channel ]	= (4.0 / (1 << 24)) * 1e6;
+		
+		adc_data_rate		= (list[ 1 ] >>  3) & 0x001F;
+		adc_sinc			= (list[ 1 ] >>  0) & 0x0007;
+		ch_delay			= (list[ 2 ] >> 10) & 0x003F;
+		adc_normal_setting	= (list[ 2 ] >>  9) & 0x0001;
+		ch_chop				= (list[ 2 ] >>  7) & 0x0001;
+		
+		base_freq			= self.data_rates[ adc_data_rate ];
+		delay_setting		= self.delays[ ch_delay ] / 4608000.00;
+		
+		if (28 < adc_data_rate) or (4 < adc_sinc) or ((adc_data_rate < 12) and adc_sinc):
+			return 0.00;
+		
+		if not adc_normal_setting:
+			base_freq	/= adc_sinc + 1;
+		
+		if ch_chop:
+			base_freq	/= 2;
 
-		self.num_logcal_ch	= 0
+		self.channel_delay[ logical_channel ]	= (1 / base_freq) + delay_setting
 		
-		for i in range( 16 ):
-			if bits & (mask << i):
-				self.num_logcal_ch	+= 1
-		
-		print( f"self.num_logcal_ch = {self.num_logcal_ch}" )
-		
+		print( f"base_freq     = {base_freq}",  );
+		print( f"delay_setting = {delay_setting}" );
+		print( f"total delay   = {self.channel_delay[ logical_channel ]}" );
+
+
 	def measure( self, ch = None ):
 		"""
 		Measure input voltage
@@ -355,8 +390,7 @@ class NAFE13388( AFE_base, SPI_target ):
 		if ch is not None:
 			self.reg( self.REG_DICT["CMD_CH0"] + ch )
 			self.reg( "CMD_SS" )
-#			sleep_ms( 100 )
-			sleep_ms( 50 )
+			sleep( self.channel_delay[ ch ] )
 			return self.reg( self.REG_DICT["CH_DATA0"] + ch ) * self.coeff_microvolt[ ch ]
 		
 		values	= []
@@ -364,7 +398,7 @@ class NAFE13388( AFE_base, SPI_target ):
 		command	= "CMD_MS"
 
 		for i in range( self.num_logcal_ch ):
-			self.write_r16( command )
+			self.reg( command )
 			"""
 			print( f"after command" )
 			for i in range( 100 ):
@@ -372,11 +406,14 @@ class NAFE13388( AFE_base, SPI_target ):
 				sleep_us( 10 )
 			"""
 			sleep_ms( 10 )
-			values	+= [ self.read_r24( self.REG_DICT["CH_DATA0"] + i ) ]
+			values	+= [ self.reg( self.REG_DICT["CH_DATA0"] + i ) ]
 		
 		print( values )
 
 		return values
+
+	def read_V( self, ch = None ):
+		return self.read( ch ) * self.coeff_microvolt[ ch ] * 1e-6
 		
 	def read( self, ch = None ):
 		"""
@@ -386,17 +423,23 @@ class NAFE13388( AFE_base, SPI_target ):
 		----------
 		ch : int
 			Logical input channel number or None
-			This part need to be implemented
 			
 		Returns
 		-------
 		list of raw measured values if "ch" was not given
 
 		"""
+		
+		if ch is not None:
+			self.reg( self.REG_DICT["CMD_CH0"] + ch )
+			self.reg( "CMD_SS" )
+			sleep( self.channel_delay[ ch ] * self.delay_accuracy )
+			return self.reg( self.REG_DICT["CH_DATA0"] + ch )
+			
 		values	= []
 
 		for i in range( self.num_logcal_ch ):
-			values	+= [ self.read_r24( 0x2040 + i ) ]
+			values	+= [ self.reg( 0x2040 + i ) ]
 		
 		print( values )
 
@@ -411,9 +454,9 @@ class NAFE13388( AFE_base, SPI_target ):
 		float : Die temperature in celcius
 
 		"""
-		return self.read_r16( 0x34, signed = True ) / 64
+		return self.reg( 0x34, signed = True ) / 64
 
-	def reg( self, reg, value = None ):
+	def reg( self, reg, value = None, signed = False ):
 		"""
 		register access read/write
 		data bit length (24 or 16) is auto selected by register name/address
@@ -451,7 +494,7 @@ class NAFE13388( AFE_base, SPI_target ):
 			if bit_width == 24:
 				return self.read_r24( reg )
 			else:
-				return self.read_r16( reg )
+				return self.read_r16( reg, signed )
 	
 	def	write_r16( self, reg, val = None ):
 		"""
@@ -521,7 +564,7 @@ class NAFE13388( AFE_base, SPI_target ):
 		reg		<<= 1
 		reg		|= 0x4000
 		regH	= reg >> 8 & 0xFF
-		regL	= reg & 0xFF
+		regL	= reg      & 0xFF
 
 		data	= bytearray( [ regH, regL, 0xFF, 0xFF ] )
 		self.__if.write_readinto( data, data )
@@ -545,7 +588,7 @@ class NAFE13388( AFE_base, SPI_target ):
 		reg		<<= 1
 		reg		|= 0x4000
 		regH	= reg >> 8 & 0xFF
-		regL	= reg & 0xFF
+		regL	= reg      & 0xFF
 
 		data	= bytearray( [ regH, regL, 0xFF, 0xFF, 0xFF ] )
 		self.__if.write_readinto( data, data )
