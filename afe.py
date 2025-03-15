@@ -13,12 +13,15 @@ def main():
 	spi	= SPI( 0, 1000_000, cs = 0, phase = 1 )
 
 	afe	= NAFE13388( spi, None )
+	
+	sleep_ms( 250 )	#	wait for first DIE_TEMP register update
 	afe.dump( [ 0x7C, 0x7D, 0x7E, 0xAE, 0xAF, 0x34, 0x37, None, 0x30, 0x31 ] )
 	
 	count	= 0
 
-	afe.logical_ch_config( 0, [ 0x1070, 0x0084, 0x2900, 0x0000 ] ),
-	afe.logical_ch_config( 1, [ 0x2070, 0x0084, 0x2900, 0x0000 ] ),
+	sleep(0.5)
+	afe.logical_ch_config( 0, [ 0x1710, 0x007C, 0x4E00, 0x0000 ] ),
+	afe.logical_ch_config( 1, [ 0x2710, 0x007C, 0x4E00, 0x0000 ] ),
 
 	data	= [ 0 ] * 2
 
@@ -237,8 +240,8 @@ class NAFE13388( AFE_base, SPI_target ):
 		self.reset_pin.value( 1 )
 		self.syn_pin.value( 1 )
 		
-		self.reset()
 		self.boot()
+		self.reset()
 		
 		self.coeff_microvolt	= [ 0 ] * 16
 		
@@ -247,17 +250,7 @@ class NAFE13388( AFE_base, SPI_target ):
 		"""
 		Boot-up procedure
 		"""
-		reg_init	= [
-						{	0x0010: None, 
-							},
-						{	0x0030: 0x0010, 
-							},
-					]
-					
-		for step in reg_init:
-			for k, v in step.items():
-				self.write_r16( k, v )
-			sleep( WAIT )
+		self.reg( "CMD_ABORT" )
 
 	def reset( self, hardware_reset = False ):
 		"""
@@ -297,7 +290,7 @@ class NAFE13388( AFE_base, SPI_target ):
 		"""
 		for r in list:
 			if r:
-				print( "0x{:04X} = {:04X}".format( r, self.read_r16( r ) ) )
+				print( "0x{:04X} = {:06X}".format( r, self.reg( r ) ) )
 			else:
 				print( "" )
 
@@ -311,12 +304,10 @@ class NAFE13388( AFE_base, SPI_target ):
 			List of register values for register 0x20, 0x21, 0x22 and 0x23
 			
 		"""
-		for r in list:
-			if r:
-				print( "0x{:04X} = {:04X}".format( r, self.read_r16( r ) ) )
-			else:
-				print( "" )
-				
+
+		print(  "" )
+		print( f"logical_ch_config for {logical_channel}" )
+
 		self.reg( self.REG_DICT["CMD_CH0"] + logical_channel )
 
 		for r, v in zip( self.ch_cnfg_reg, list ):
@@ -440,11 +431,16 @@ class NAFE13388( AFE_base, SPI_target ):
 
 		bit_width	= 24
 
+#		print( f"reg# = 0x{reg:04X}" )
+
 		if (((reg >> 4) & 0xF) < 0x4) or (((reg >> 4) & 0xF) == 0x7):
 			bit_width	= 16
 
 		if (((reg >> 4) & 0xF) < 0x2):
 			bit_width	= 0
+
+#		print( f"reg# = 0x{reg:04X} (w:{bit_width})" )
+
 
 		if (value is not None) or (bit_width == 0):
 			if bit_width == 24:
@@ -477,10 +473,9 @@ class NAFE13388( AFE_base, SPI_target ):
 		if val is None:
 			self.send( [ regH, regL ] )
 		else:
-			valH	= val >> 16 & 0xFF
-			valM	= val >>  8 & 0xFF
-			valL	= val       & 0xFF
-			self.send( [ regH, regL, valH, valM, valL ] )
+			valH	= val >> 8 & 0xFF
+			valL	= val      & 0xFF
+			self.send( [ regH, regL, valH, valL ] )
 
 	def	write_r24( self, reg, val = None ):
 		"""
@@ -502,9 +497,10 @@ class NAFE13388( AFE_base, SPI_target ):
 		if val is None:
 			self.send( [ regH, regL ] )
 		else:
-			valH	= val >> 8 & 0xFF
-			valL	= val & 0xFF
-			self.send( [ regH, regL, valH, valL ] )
+			valH	= val >> 16 & 0xFF
+			valM	= val >>  8 & 0xFF
+			valL	= val       & 0xFF
+			self.send( [ regH, regL, valH, valM, valL ] )
 
 	def	read_r16( self, reg, signed = False ):
 		"""
