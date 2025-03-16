@@ -45,6 +45,16 @@ def main():
 	data	= [ 0 ] * 2
 
 	while True:
+		data	= afe.read_V()
+		
+		for v in data:
+			print( f"{v}, ", end = "" )
+		
+		print( f"" )
+			
+
+
+	while True:
 		data[ 0 ]	= afe.read_V( 0 )
 		data[ 1 ]	= afe.read_V( 1 )
 		
@@ -305,60 +315,6 @@ class NAFE13388( AFE_base, SPI_target ):
 			
 		raise AFE_Error( "NAFE13388 couldn't get ready. Check power supply or pin conections" )
 	
-	def dump( self, list ):
-		"""
-		Register dump
-
-		Parameters
-		----------
-		list : list
-			List of register address/pointer.
-		"""
-		for k, v in self.reg_dump( list ).items():
-			if k:
-				if 24 == v[ "width" ]:
-					print( f"{k:22} = {v[ 'value' ]:06X}" )
-				else:
-					print( f"{k:22} = {v[ 'value' ]:04X}" )
-	
-	def cc_dump( self, logical_channel ):
-		"""
-		Channel configuration register dump
-		"""
-		self.reg( self.REG_DICT["CMD_CH0"] + logical_channel )
-
-		for k, v in self.reg_dump( self.ch_cnfg_reg ).items():
-			print( f"   {k}: 0x{v[ 'value' ]:04X}", end = "" )
-		
-		print( "" )
-
-		
-	def reg_dump( self, list ):
-		"""
-		Register dump
-
-		Parameters
-		----------
-		list : list
-			List of register address/pointer.
-		"""
-		
-		data	= dict()
-		
-		for r in list:
-			if r is None:
-				reg_name	= None
-			else:
-				reg_addr	= self.REG_DICT[  r ] if type( r ) != int else r
-				reg_name	= self.rREG_DICT[ r ] if type( r ) == int else r
-				value		= self.reg( reg_addr )
-				width		= self.reg_bit_width( reg_addr )
-	
-			data[ reg_name ]	= { "value": value, "width": width }
-		
-		return data
-
-
 	def open_logical_channel( self, logical_channel, list ):
 		"""
 		Logical channel configuration
@@ -388,6 +344,8 @@ class NAFE13388( AFE_base, SPI_target ):
 		
 		self.channel_delay[ logical_channel ]	= (1 / base_freq) + delay_setting
 		self.num_logcal_ch, self.total_delay	= self.total_channel_info()
+
+		print( f"base_freq = {base_freq}, delay_setting = {delay_setting}, self.channel_delay[ logical_channel ] = {self.channel_delay[ logical_channel ]}" )
 
 	def freq_and_delay( self, cc1, cc2 ):
 		adc_data_rate		= (cc1 >>  3) & 0x001F
@@ -480,8 +438,11 @@ class NAFE13388( AFE_base, SPI_target ):
 		return values
 
 	def read_V( self, ch = None ):
-		return self.read( ch ) * self.coeff_microvolt[ ch ] * 1e-6
-		
+		if ch is not None:
+			return self.read( ch ) * self.coeff_microvolt[ ch ] * 1e-6
+		else:
+			return [ v * self.coeff_microvolt[ ch ] * 1e-6 for ch, v in enumerate( self.read() )]
+			
 	def read( self, ch = None ):
 		"""
 		Read input value
@@ -503,15 +464,14 @@ class NAFE13388( AFE_base, SPI_target ):
 			sleep( self.channel_delay[ ch ] * self.delay_accuracy )
 			return self.reg( self.REG_DICT["CH_DATA0"] + ch )
 			
-		self.reg( "CMD_MS" )
-		values	= []
-
-		for i in range( self.num_logcal_ch ):
-			values	+= [ self.reg( 0x2040 + i ) ]
-		
-		print( values )
-
-		return values
+		else:		
+			values	= []
+			self.reg( "CMD_MM" )
+			sleep( self.total_delay * self.delay_accuracy )
+			for i in range( 16 ):
+				values	+= [ self.reg( self.REG_DICT["CH_DATA0"] + i ) ]
+			
+			return values
 	
 	def die_temp( self ):
 		"""
@@ -696,6 +656,61 @@ class NAFE13388( AFE_base, SPI_target ):
 		data	= unpack( ">l", data[2:] )[ 0 ] >> 8
 
 		return data
+		
+	def dump( self, list ):
+		"""
+		Register dump
+
+		Parameters
+		----------
+		list : list
+			List of register address/pointer.
+		"""
+		for k, v in self.reg_dump( list ).items():
+			if k:
+				if 24 == v[ "width" ]:
+					print( f"{k:22} = {v[ 'value' ]:06X}" )
+				else:
+					print( f"{k:22} = {v[ 'value' ]:04X}" )
+	
+	def cc_dump( self, logical_channel ):
+		"""
+		Channel configuration register dump
+		"""
+		self.reg( self.REG_DICT["CMD_CH0"] + logical_channel )
+
+		for k, v in self.reg_dump( self.ch_cnfg_reg ).items():
+			print( f"   {k}: 0x{v[ 'value' ]:04X}", end = "" )
+		
+		print( "" )
+
+		
+	def reg_dump( self, list ):
+		"""
+		Register dump
+
+		Parameters
+		----------
+		list : list
+			List of register address/pointer.
+		"""
+		
+		data	= dict()
+		
+		for r in list:
+			if r is None:
+				reg_name	= None
+			else:
+				reg_addr	= self.REG_DICT[  r ] if type( r ) != int else r
+				reg_name	= self.rREG_DICT[ r ] if type( r ) == int else r
+				value		= self.reg( reg_addr )
+				width		= self.reg_bit_width( reg_addr )
+	
+			data[ reg_name ]	= { "value": value, "width": width }
+		
+		return data
+
+
 
 if __name__ == "__main__":
 	main()
