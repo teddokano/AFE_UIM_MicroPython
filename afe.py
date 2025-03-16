@@ -2,8 +2,9 @@ from	machine		import	SPI, Pin, Timer
 from	utime		import	sleep, sleep_ms, sleep_us
 from	struct		import	unpack
 from	micropython	import	schedule
-from nxp_periph.interface	import	SPI_target
-from nxp_periph.MikanUtil	import	MikanUtil
+from	nxp_periph.interface	import	SPI_target
+from	nxp_periph.MikanUtil	import	MikanUtil
+import	os
 
 WAIT	= 0.001
 #WAIT	= 0
@@ -11,6 +12,13 @@ CWAIT	= 0
 
 def main():
 	spi	= SPI( 0, 1_000_000, cs = 0, phase = 1 )
+
+	"""
+	while True:
+		data	= ( bytearray( [ 0x55, 0xAA ] ) )
+		spi.write_readinto( data, data )
+		sleep( 0.5 )
+	"""
 
 	afe	= NAFE13388( spi, None )
 	
@@ -23,11 +31,8 @@ def main():
 
 	count	= 0
 
-#	afe.logical_ch_config( 0, [ 0x1710, 0x00BC, 0x4C00, 0x0000 ] )
-#	afe.logical_ch_config( 1, [ 0x5710, 0x00BC, 0x4C00, 0x0000 ] )
-
-	afe.logical_ch_config( 0, [ 0x1070, 0x3084, 0x2900, 0x0000 ] )
-	afe.logical_ch_config( 1, [ 0x2070, 0x3084, 0x2900, 0x0000 ] )
+	afe.logical_ch_config( 0, [ 0x1710, 0x00BC, 0x4C00, 0x0000 ] )
+	afe.logical_ch_config( 1, [ 0x5710, 0x00BC, 0x4C00, 0x0000 ] )
 
 	data	= [ 0 ] * 2
 
@@ -253,26 +258,20 @@ class NAFE13388( AFE_base, SPI_target ):
 		###	For UIM
 		self.reset_pin	= Pin( "D7", Pin.OUT )
 		self.syn_pin	= Pin( "D6", Pin.OUT )
-		self.drdy_pin	= Pin( "D4", Pin.IN )
-		self.int_pin	= Pin( "D3", Pin.IN )
-
+		self.drdy_pin	= Pin( "D4", Pin.IN  )
+		
+		if "MIMXRT101" not in os.uname().machine:
+			self.int_pin	= Pin( "D3", Pin.IN  )
 		
 		self.reset_pin.value( 1 )
 		self.syn_pin.value( 1 )
-		
-		self.boot()
-		self.reset()
+
+		self.reset( hardware_reset = True )
 		
 		self.coeff_microvolt	= [ 0 ] * 16
 		self.channel_delay		= [ 0 ] * 16
 		
 		self.rREG_DICT = {v: k for k, v in self.REG_DICT.items()}
-
-	def boot( self ):
-		"""
-		Boot-up procedure
-		"""
-		self.reg( "CMD_ABORT" )
 
 	def reset( self, hardware_reset = False ):
 		"""
@@ -285,7 +284,7 @@ class NAFE13388( AFE_base, SPI_target ):
 			self.reset_pin.value( 1 )
 		else:
 			self.reg( "CMD_RESET" )
-	
+
 		retry	= 10
 	
 		while retry:
@@ -296,10 +295,7 @@ class NAFE13388( AFE_base, SPI_target ):
 			
 			retry	-= 1
 			
-		print( "NAFE13388 couldn't get ready. Check power supply or pin conections\r\n" );
-
-		while True:
-			pass
+		raise AFE_Error( "NAFE13388 couldn't get ready. Check power supply or pin conections" )
 	
 	def dump( self, list ):
 		"""
@@ -451,7 +447,6 @@ class NAFE13388( AFE_base, SPI_target ):
 			self.reg( self.REG_DICT["CMD_CH0"] + ch )
 			self.reg( "CMD_SS" )
 			sleep( self.channel_delay[ ch ] * self.delay_accuracy )
-#			sleep( 0.2 )
 			return self.reg( self.REG_DICT["CH_DATA0"] + ch )
 			
 		values	= []
