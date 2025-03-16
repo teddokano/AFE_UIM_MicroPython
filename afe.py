@@ -21,9 +21,7 @@ def main():
 	"""
 
 	afe	= NAFE13388( spi, None )
-	afe.blink_leds()
-	
-	afe.bit_operation( "SYS_CONFIG0", 0x0010, 0x0010 )
+#	afe.blink_leds()
 	
 	sleep_ms( 250 )	#	wait for first DIE_TEMP register update
 	afe.dump( [ "PN2", "PN1", "PN0", "SERIAL1", "SERIAL0", "DIE_TEMP", None, "SYS_CONFIG0", "SYS_STATUS0" ] )
@@ -34,26 +32,22 @@ def main():
 
 	afe.open_logical_channel( 0, [ 0x1710, 0x00BC, 0x4C00, 0x0000 ] )
 	afe.open_logical_channel( 1, [ 0x5710, 0x00BC, 0x4C00, 0x0000 ] )
-	afe.open_logical_channel( 2, [ 0x0010, 0x00BC, 0x4C00, 0x0000 ] )
-	afe.open_logical_channel( 5, [ 0x7710, 0x00BC, 0x4C00, 0x0000 ] )
-
-	afe.close_logical_channel( 2 )
-
-	afe.open_logical_channel( 5, [ 0x7710, 0x00BC, 0x4C00, 0x0000 ] )
+	afe.open_logical_channel( 3, [ 0x0010, 0x00BC, 0x4C00, 0x0000 ] )
+	afe.open_logical_channel( 7, [ 0x7710, 0x00BC, 0x4C00, 0x0000 ] )
 
 	afe.info_logical_channel()
 
-	data	= [ 0 ] * 2
-
 	while True:
 		data	= afe.read_V()
-		
+
 		for v in data:
 			print( f"{v}, ", end = "" )
 		
 		print( f"" )
 			
 
+
+	data	= [ 0 ] * 2
 
 	while True:
 		data[ 0 ]	= afe.read_V( 0 )
@@ -277,8 +271,12 @@ class NAFE13388( AFE_base, SPI_target ):
 		###	For UIM
 		self.reset_pin	= Pin( "D7", Pin.OUT )
 		self.syn_pin	= Pin( "D6", Pin.OUT )
-		self.drdy_pin	= Pin( "D4", Pin.IN  )
-		
+
+		if "MIMXRT105" in os.uname().machine:
+			self.drdy_pin	= Pin( "D0", Pin.IN  )
+		else:
+			self.drdy_pin	= Pin( "D4", Pin.IN  )
+			
 		if "MIMXRT101" not in os.uname().machine:
 			self.int_pin	= Pin( "D3", Pin.IN  )
 		
@@ -292,6 +290,15 @@ class NAFE13388( AFE_base, SPI_target ):
 		self.enabled_ch_list	= []
 		
 		self.rREG_DICT = {v: k for k, v in self.REG_DICT.items()}
+		
+		self.drdy_flag	= False
+		
+		self.drdy_pin.irq( trigger = Pin.IRQ_RISING, handler = self.drdy_callback )
+		
+	def drdy_callback( self, p ):
+		self.drdy_flag	= True
+
+#		schedule( self. )
 
 	def reset( self, hardware_reset = False ):
 		"""
@@ -389,57 +396,21 @@ class NAFE13388( AFE_base, SPI_target ):
 
 		return ch, delay, list
 
-	def info_logical_channel( self ):
-		print( f"info_logical_channel:" )
+	def continuous_read( self, callback ):
+		self.bit_operation( "SYS_CONFIG0", 0x0010, 0x0010 )
 
-		print( f"  enabled channels         = {self.num_logcal_ch}" )
-		print( f"  enabled channels bitmap  = {self.num_logcal_ch}" )
-		print( f"  total_delay              = {self.total_delay}" );
+		self.data	= []
 
-		for i in range( 16 ):
-			if self.bitmap & (0x1 << i):
-				print( f"  logical channel {i:2} = ", end = "" )
-				self.cc_dump( i )
+		self.drdy_flag	= False
+		self.reg( "CMD_MC" )
 
-	def measure( self, ch = None ):
-		"""
-		Measure input voltage
+		while True:
+			if self.drdy_flag:
+				self.drdy_flag	= False
+				
+				for n in self.enabled_ch_list:
+					self.data	+= [ self.reg( self.REG_DICT["CH_DATA0"] + n ) ]
 
-		Parameters
-		----------
-		ch : int
-			Logical input channel number or None
-			
-		Returns
-		-------
-		float in voltage (microvolt) if "ch" was given
-		list of raw measured values if "ch" was not given
-
-		"""
-		if ch is not None:
-			self.reg( self.REG_DICT["CMD_CH0"] + ch )
-			self.reg( "CMD_SS" )
-			sleep( self.channel_delay[ ch ] )
-			return self.reg( self.REG_DICT["CH_DATA0"] + ch ) * self.coeff_microvolt[ ch ]
-		
-		values	= []
-
-		command	= "CMD_MS"
-
-		for i in range( self.num_logcal_ch ):
-			self.reg( command )
-			"""
-			print( f"after command" )
-			for i in range( 100 ):
-				print( f"0x31 = {self.read_r16( 0x31 ):04X}" )
-				sleep_us( 10 )
-			"""
-			sleep_ms( 10 )
-			values	+= [ self.reg( self.REG_DICT["CH_DATA0"] + i ) ]
-		
-		print( values )
-
-		return values
 
 	def read_V( self, ch = None ):
 		if ch is not None:
@@ -463,20 +434,29 @@ class NAFE13388( AFE_base, SPI_target ):
 		"""
 		
 		if ch is not None:
+			self.bit_operation( "SYS_CONFIG0", 0x0010, 0x0000 )
+			
 			self.reg( self.REG_DICT["CMD_CH0"] + ch )
 			self.reg( "CMD_SS" )
 			sleep( self.channel_delay[ ch ] * self.delay_accuracy )
 			return self.reg( self.REG_DICT["CH_DATA0"] + ch )
 			
-		else:		
+		else:
+			self.bit_operation( "SYS_CONFIG0", 0x0010, 0x0010 )
+	
 			values	= []
 			self.reg( "CMD_MM" )
 			sleep( self.total_delay * self.delay_accuracy )
+			
+			"""
 			for n in self.enabled_ch_list:
 				values	+= [ self.reg( self.REG_DICT["CH_DATA0"] + n ) ]
+			"""
+			values	= self.burst_read()
 			
 			return values
-	
+
+		
 	def die_temp( self ):
 		"""
 		Die temperature
@@ -660,7 +640,26 @@ class NAFE13388( AFE_base, SPI_target ):
 		data	= unpack( ">l", data[2:] )[ 0 ] >> 8
 
 		return data
+	
+	def burst_read( self ):
+		reg		 = self.REG_DICT[ "CMD_BURST_DATA" ] << 1
+		reg		|= 0x4000
+		regH	= reg >> 8 & 0xFF
+		regL	= reg      & 0xFF
 		
+		data	= bytearray( [ regH, regL ] + [ 0xFF, 0xFF, 0xFF ] * self.num_logcal_ch, )
+		self.__if.write_readinto( data, data )
+	
+		rv	= []
+	
+		for i in range( self.num_logcal_ch ):
+			chunk		 = data[ 1 + (3 * i) : 5 + (3 * i) ]
+			chunk[0]	 = 0
+
+			rv	+=[ unpack( ">l", chunk )[ 0 ] ]
+
+		return rv
+
 	def dump( self, list ):
 		"""
 		Register dump
@@ -677,6 +676,18 @@ class NAFE13388( AFE_base, SPI_target ):
 				else:
 					print( f"{k:22} = {v[ 'value' ]:04X}" )
 	
+	def info_logical_channel( self ):
+		print( f"info_logical_channel:" )
+
+		print( f"  enabled channels         = {self.num_logcal_ch}" )
+		print( f"  enabled channels bitmap  = {self.num_logcal_ch}" )
+		print( f"  total_delay              = {self.total_delay}" );
+
+		for i in range( 16 ):
+			if self.bitmap & (0x1 << i):
+				print( f"  logical channel {i:2} = ", end = "" )
+				self.cc_dump( i )
+
 	def cc_dump( self, logical_channel ):
 		"""
 		Channel configuration register dump
