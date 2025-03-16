@@ -6,10 +6,6 @@ from	nxp_periph.interface	import	SPI_target
 from	nxp_periph.MikanUtil	import	MikanUtil
 import	os
 
-WAIT	= 0.001
-#WAIT	= 0
-CWAIT	= 0
-
 def main():
 	spi	= SPI( 0, 1_000_000, cs = 0, phase = 1 )
 
