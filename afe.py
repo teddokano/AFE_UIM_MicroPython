@@ -38,7 +38,6 @@ def main():
 
 	afe.info_logical_channel()
 
-
 	if demo == "continuous read":
 		afe.continuous_read_start()
 
@@ -51,12 +50,16 @@ def main():
 				prev_count = afe.cb_count
 			
 	elif demo == "self-calibration":
-		afe.dump( [ afe.REG_DICT[ "GAIN_COEFF0" ] + i for i in range( 32 ) ] )
+		reg_list	= [ afe.REG_DICT[ "GAIN_COEFF0" ] + i for i in range( 32 ) ]
+		coeff_list0	= afe.reg_dump( reg_list )
 
 		for i in range( 8 ):
 			afe.self_calibrate( i )
 
-		afe.dump( [ afe.REG_DICT[ "GAIN_COEFF0" ] + i for i in range( 32 ) ] )
+		coeff_list1	= afe.reg_dump( reg_list )
+
+		for p, n in zip( coeff_list0, coeff_list1 ):
+			print( f"{p[ 'name' ]:15} = {p[ 'value' ]:8} -> {n[ 'value' ]:8}" )
 
 		while True:
 			data	= afe.read_V()
