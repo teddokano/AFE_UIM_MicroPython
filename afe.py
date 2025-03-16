@@ -6,6 +6,10 @@ from	nxp_periph.interface	import	SPI_target
 from	nxp_periph.MikanUtil	import	MikanUtil
 import	os
 
+demo	= "continuous read"
+#demo 	= "multichannel read"
+#demo 	= "single channel"
+
 def main():
 	spi	= SPI( 0, 1_000_000, cs = 0, phase = 1 )
 
@@ -33,33 +37,35 @@ def main():
 
 	afe.info_logical_channel()
 
-	afe.continuous_read_start()
 
-	prev_count	= afe.cb_count
+	if demo == "continuous read":
+		afe.continuous_read_start()
 
-	while True:
-		if prev_count != afe.cb_count:
-			afe.data	= [ v * afe.coeff_microvolt[ ch ] * 1e-6 for ch, v in enumerate( afe.data )]
-			print( f"{afe.data}" )
-			prev_count = afe.cb_count
+		prev_count	= afe.cb_count
+
+		while True:
+			if prev_count != afe.cb_count:
+				afe.data	= [ v * afe.coeff_microvolt[ ch ] * 1e-6 for ch, v in enumerate( afe.data )]
+				print( f"{afe.data}" )
+				prev_count = afe.cb_count
 			
-	while True:
-		data	= afe.read_V()
+	elif demo == "multichannel read":
+		while True:
+			data	= afe.read_V()
 
-		for v in data:
-			print( f"{v}, ", end = "" )
-		
-		print( f"" )
+			for v in data:
+				print( f"{v}, ", end = "" )
 			
+			print( f"" )
+			
+	elif demo == "single channel":
+		data	= [ 0 ] * 2
 
-
-	data	= [ 0 ] * 2
-
-	while True:
-		data[ 0 ]	= afe.read_V( 0 )
-		data[ 1 ]	= afe.read_V( 1 )
-		
-		print( f"read data {data[ 0 ]}, {data[ 1 ]}" )
+		while True:
+			data[ 0 ]	= afe.read_V( 0 )
+			data[ 1 ]	= afe.read_V( 1 )
+			
+			print( f"read data {data[ 0 ]}, {data[ 1 ]}" )
 
 class AFE_Error( Exception ):
 	"""
