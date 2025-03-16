@@ -6,7 +6,8 @@ from	nxp_periph.interface	import	SPI_target
 from	nxp_periph.MikanUtil	import	MikanUtil
 import	os
 
-demo	= "continuous read"
+demo == "custom gain"
+#demo	= "continuous read"
 #demo 	= "multichannel read"
 #demo 	= "single channel"
 
@@ -36,6 +37,68 @@ def main():
 	afe.open_logical_channel( 7, [ 0x7710, 0x00BC, 0x4C00, 0x0000 ] )
 
 	afe.info_logical_channel()
+
+
+	if demo == "custom gain":
+	
+		INPUT_GND			= 0x0010;
+		INPUT_A1P_SINGLE	= 0x1710;
+
+		class CoeffIndex(Enum):
+			CAL_FOR_PGA_0_2	= 0,
+			CAL_NONE		= 8,
+			CAL__5V_NONE,
+			CAL_10V_NONE,
+			CAL__5V_CUSTOM,
+			CAL_10V_CUSTOM,
+			CAL_1V5V_NONE,
+			CAL_1V5V_CUSTOM,
+			
+		lc_settings	= [
+			[ INPUT_A1P_SINGLE, (CoeffIndex.CAL_NONE        << 12) | 0x0084, 0x2900, 0x0000 ],
+			[ INPUT_A1P_SINGLE, (CoeffIndex.CAL_FOR_PGA_0_2 << 12) | 0x0084, 0x2900, 0x0000 ],
+			[ INPUT_A1P_SINGLE, (CoeffIndex.CAL__5V_NONE    << 12) | 0x0084, 0x2900, 0x0000 ],
+			[ INPUT_A1P_SINGLE, (CoeffIndex.CAL__5V_CUSTOM  << 12) | 0x0084, 0x2900, 0x0000 ],
+			[ INPUT_A1P_SINGLE, (CoeffIndex.CAL_10V_NONE    << 12) | 0x0084, 0x2900, 0x0000 ],
+			[ INPUT_A1P_SINGLE, (CoeffIndex.CAL_10V_CUSTOM  << 12) | 0x0084, 0x2900, 0x0000 ],
+			[ INPUT_A1P_SINGLE, (CoeffIndex.CAL_1V5V_NONE   << 12) | 0x0084, 0x2900, 0x0000 ],
+			[ INPUT_A1P_SINGLE, (CoeffIndex.CAL_1V5V_CUSTOM << 12) | 0x0084, 0x2900, 0x0000 ],
+			[ INPUT_GND       , (CoeffIndex.CAL_NONE        << 12) | 0x0084, 0x2900, 0x0000 ],
+			[ INPUT_GND       , (CoeffIndex.CAL_FOR_PGA_0_2 << 12) | 0x0084, 0x2900, 0x0000 ],
+			[ INPUT_GND       , (CoeffIndex.CAL__5V_NONE    << 12) | 0x0084, 0x2900, 0x0000 ],
+			[ INPUT_GND       , (CoeffIndex.CAL__5V_CUSTOM  << 12) | 0x0084, 0x2900, 0x0000 ],
+			[ INPUT_GND       , (CoeffIndex.CAL_10V_NONE    << 12) | 0x0084, 0x2900, 0x0000 ],
+			[ INPUT_GND       , (CoeffIndex.CAL_10V_CUSTOM  << 12) | 0x0084, 0x2900, 0x0000 ],
+		]
+
+		gain_for_5V,    offset_for_5V	= afe.gain_offset_coeff( ( 5.0, 2000), (0.0,  0) )
+		gain_for_10V,   offset_for_10V	= afe.gain_offset_coeff( (10.0, 2000), (0.0,  0) )
+		gain_for_1V5V, offset_for_1V5V	= afe.gain_offset_coeff( ( 5.0, 2000), (1.0, 16) )
+		
+		coeff_gain_none		= afe.reg( afe.REG_DICT[ "GAIN_COEFF0"   ] + CAL_NONE        )
+		coeff_offset_none	= afe.reg( afe.REG_DICT[ "OFFSET_COEFF0" ] + CAL_NONE        )
+		coeff_gain_cal		= afe.reg( afe.REG_DICT[ "GAIN_COEFF0"   ] + CAL_FOR_PGA_0_2 )
+		coeff_offset_cal	= afe.reg( afe.REG_DICT[ "OFFSET_COEFF0" ] + CAL_FOR_PGA_0_2 )
+		
+		afe.reg( afe.REG_DICT[ "GAIN_COEFF0"   ] + CAL__5V_NONE,    coeff_gain_none * gain_for_5V   )
+		afe.reg( afe.REG_DICT[ "GAIN_COEFF0"   ] + CAL_10V_NONE,    coeff_gain_none * gain_for_10V  )
+		afe.reg( afe.REG_DICT[ "GAIN_COEFF0"   ] + CAL_10V_NONE,    coeff_gain_none * gain_for_1V5V )
+		afe.reg( afe.REG_DICT[ "GAIN_COEFF0"   ] + CAL__5V_CUSTOM,  coeff_gain_none * gain_for_5V   )
+		afe.reg( afe.REG_DICT[ "GAIN_COEFF0"   ] + CAL_10V_CUSTOM,  coeff_gain_none * gain_for_10V  )
+		afe.reg( afe.REG_DICT[ "GAIN_COEFF0"   ] + CAL_1V5V_CUSTOM, coeff_gain_none * gain_for_1V5V )
+
+		afe.reg( afe.REG_DICT[ "OFFSET_COEFF0" ] + CAL__5V_NONE,    offset_for_5V   - coeff_offset_none )
+		afe.reg( afe.REG_DICT[ "OFFSET_COEFF0" ] + CAL_10V_NONE,    offset_for_10V  - coeff_offset_none )
+		afe.reg( afe.REG_DICT[ "OFFSET_COEFF0" ] + CAL_10V_NONE,    offset_for_1V5V - coeff_offset_none )
+		afe.reg( afe.REG_DICT[ "OFFSET_COEFF0" ] + CAL__5V_CUSTOM,  offset_for_5V   - coeff_offset_cal  )
+		afe.reg( afe.REG_DICT[ "OFFSET_COEFF0" ] + CAL_10V_CUSTOM,  offset_for_10V  - coeff_offset_cal  )
+		afe.reg( afe.REG_DICT[ "OFFSET_COEFF0" ] + CAL_1V5V_CUSTOM, offset_for_1V5V - coeff_offset_cal  )
+
+		while True:
+			data	= afe.read()
+
+			for v in data:
+				print( f"{v}, ", end = "" )
 
 
 	if demo == "continuous read":
@@ -419,6 +482,23 @@ class NAFE13388( AFE_base, SPI_target ):
 				list	+= [ i ]
 
 		return ch, delay, list
+
+	def gain_offset_coeff( self, p1, p2 ):
+		pga1x_voltage		= 5.0
+		adc_resolution		= 24
+		pga_gain_setting	= 0.2
+
+		fullscale_voltage	= pga1x_voltage / pga_gain_setting
+
+		fullscale_data		= 0x1 << (adc_resolution - 1)
+		ref_data_span		= p1[ "data" ]    - p2[ "data" ]
+		ref_voltage_span	= p1[ "voltage" ] - p2[ "voltage" ]
+	
+		dv_slope			= ref_data_span / ref_voltage_span;
+		custom_gain			= dv_slope * (fullscale_voltage / fullscale_data);
+		custom_offset		= (dv_slope * ref.low.voltage - ref.low.data) / custom_gain;
+	
+		return	custom_gain, custom_offset
 
 	def read_V( self, ch = None ):
 		if ch is not None:
