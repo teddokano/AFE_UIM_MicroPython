@@ -39,10 +39,14 @@ def main():
 
 	afe.continuous_read_start()
 
-	while True:
-		print( f"{afe.data}" )
-		sleep( 0.5 )
+	prev_count	= afe.cb_count
 
+	while True:
+		if prev_count != afe.cb_count:
+			afe.data	= [ v * afe.coeff_microvolt[ ch ] * 1e-6 for ch, v in enumerate( afe.data )]
+			print( f"{afe.data}" )
+			prev_count = afe.cb_count
+			
 	while True:
 		data	= afe.read_V()
 
@@ -311,7 +315,9 @@ class NAFE13388( AFE_base, SPI_target ):
 		self.reg( "CMD_MC" )
 
 	def continuous_read_cb( self, _ ):
-		self.data	= self.burst_read()
+		self.data		 = self.burst_read()
+		self.cb_count	+= 1
+		self.cb_count	&= 0x0FFFF
 		
 	def drdy_callback( self, p ):
 		schedule( self.continuous_read_cb, 0 )
