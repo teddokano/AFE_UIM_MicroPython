@@ -17,7 +17,7 @@ def main():
 	afe.bit_operation( "SYS_CONFIG0", 0x0010, 0x0010 )
 	
 	sleep_ms( 250 )	#	wait for first DIE_TEMP register update
-	afe.dump( [ 0x7C, 0x7D, 0x7E, 0xAE, 0xAF, 0x34, 0x37, None, 0x30, 0x31 ] )
+	afe.dump( [ "PN2", "PN1", "PN0", "SERIAL1", "SERIAL0", "DIE_TEMP", None, "SYS_CONFIG0", "SYS_STATUS0" ] )
 	
 	print( f"temp = {afe.die_temp()}℃" )
 
@@ -309,10 +309,16 @@ class NAFE13388( AFE_base, SPI_target ):
 			List of register address/pointer.
 		"""
 		for r in list:
-			if r:
-				print( f"{self.rREG_DICT[ r ]} = {self.reg( r ):06X}" )
-			else:
+			if r is None:
 				print( "" )
+			else:
+				reg_addr	= self.REG_DICT[  r ] if type( r ) != int else r
+				reg_name	= self.rREG_DICT[ r ] if type( r ) == int else r
+		
+				if 24 == self.reg_bit_width( reg_addr ):
+					print( f"{reg_name:22} = {self.reg( reg_addr ):06X}" )
+				else:
+					print( f"{reg_name:22} = {self.reg( reg_addr ):04X}" )
 
 	def logical_ch_config( self, logical_channel, list ):
 		"""
@@ -495,8 +501,6 @@ class NAFE13388( AFE_base, SPI_target ):
 				return self.read_r16( reg, signed )
 	
 	def reg_bit_width( self, reg ):
-#		reg	= self.REG_DICT[ reg ] if type( reg ) != int else reg
-
 		bit_width	= 24
 
 		if (((reg >> 4) & 0xF) < 0x4) or (((reg >> 4) & 0xF) == 0x7):
