@@ -21,6 +21,7 @@ def main():
 	"""
 
 	afe	= NAFE13388( spi, None )
+	afe.blink_leds()
 	
 	afe.bit_operation( "SYS_CONFIG0", 0x0010, 0x0010 )
 	
@@ -288,6 +289,7 @@ class NAFE13388( AFE_base, SPI_target ):
 		
 		self.coeff_microvolt	= [ 0 ] * 16
 		self.channel_delay		= [ 0 ] * 16
+		self.enabled_ch_list	= []
 		
 		self.rREG_DICT = {v: k for k, v in self.REG_DICT.items()}
 
@@ -343,7 +345,7 @@ class NAFE13388( AFE_base, SPI_target ):
 		base_freq, delay_setting	= self.freq_and_delay( list[ 1 ], list[ 2 ] )
 		
 		self.channel_delay[ logical_channel ]	= (1 / base_freq) + delay_setting
-		self.num_logcal_ch, self.total_delay	= self.total_channel_info()
+		self.num_logcal_ch, self.total_delay, self.enabled_ch_list	= self.total_channel_info()
 
 		print( f"base_freq = {base_freq}, delay_setting = {delay_setting}, self.channel_delay[ logical_channel ] = {self.channel_delay[ logical_channel ]}" )
 
@@ -372,18 +374,20 @@ class NAFE13388( AFE_base, SPI_target ):
 		bitmap	= 1 << logical_channel		
 		_, self.bitmap	= self.bit_operation( "CH_CONFIG4", bitmap, ~bitmap )
 		
-		self.num_logcal_ch, self.total_delay	= self.total_channel_info()
+		self.num_logcal_ch, self.total_delay, self.enabled_ch_list	= self.total_channel_info()
 		
 	def total_channel_info( self ):
 		ch		= 0
 		delay	= 0
+		list	= []
 
 		for i in range( 16 ):
 			if self.bitmap & (0x1 << i):
 				ch		+= 1
 				delay	+= self.channel_delay[ i ]
+				list	+= [ i ]
 
-		return ch, delay
+		return ch, delay, list
 
 	def info_logical_channel( self ):
 		print( f"info_logical_channel:" )
@@ -468,8 +472,8 @@ class NAFE13388( AFE_base, SPI_target ):
 			values	= []
 			self.reg( "CMD_MM" )
 			sleep( self.total_delay * self.delay_accuracy )
-			for i in range( 16 ):
-				values	+= [ self.reg( self.REG_DICT["CH_DATA0"] + i ) ]
+			for n in self.enabled_ch_list:
+				values	+= [ self.reg( self.REG_DICT["CH_DATA0"] + n ) ]
 			
 			return values
 	
@@ -710,6 +714,28 @@ class NAFE13388( AFE_base, SPI_target ):
 		
 		return data
 
+	def blink_leds( self ):
+		pattern	= (0x8000, 0x0040, 0x0100, 0x0080, 0x0200, 0x0400, 0x0800, 0x1000,
+			0x2000, 0x4000, 0x2000, 0x1000, 0x0800, 0x0400, 0x0200, 0x0080,
+			0x0100, 0x0040 )
+			
+		self.reg( "GPIO_CONFIG0", 0xFFC0 );
+		self.reg( "GPIO_CONFIG1", 0xFFC0 );
+		self.reg( "GPIO_CONFIG2", 0x0000 );
+
+		for n in range( 2 ):
+			for v in pattern:
+				self.reg( "GPO_DATA", v )
+				sleep_ms( 20 )
+
+		pattern2	= pattern[ :10 ]
+		pv			= 0;
+
+		for n in range( 4 ):
+			for v in pattern2:
+				pv	= pv & ~v if (n % 2) else pv | v
+				self.reg( "GPO_DATA", pv )
+				sleep_ms( 20 )
 
 
 if __name__ == "__main__":
