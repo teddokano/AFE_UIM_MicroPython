@@ -14,6 +14,8 @@ def main():
 
 	afe	= NAFE13388( spi, None )
 	
+	afe.bit_operation( "SYS_CONFIG0", 0x0010, 0x0010 )
+	
 	sleep_ms( 250 )	#	wait for first DIE_TEMP register update
 	afe.dump( [ 0x7C, 0x7D, 0x7E, 0xAE, 0xAF, 0x34, 0x37, None, 0x30, 0x31 ] )
 	
@@ -23,7 +25,7 @@ def main():
 
 	sleep(0.5)
 	afe.logical_ch_config( 0, [ 0x1710, 0x00BC, 0x4C00, 0x0000 ] ),
-	afe.logical_ch_config( 1, [ 0x7710, 0x00BC, 0x4C00, 0x0000 ] ),
+	afe.logical_ch_config( 1, [ 0x5710, 0x00BC, 0x4C00, 0x0000 ] ),
 
 	data	= [ 0 ] * 2
 
@@ -33,6 +35,12 @@ def main():
 		
 		print( f"read data {data[ 0 ]}, {data[ 1 ]}" )
 
+class AFE_Error( Exception ):
+	"""
+	Just a class for I2C exception handling
+	"""
+	pass
+	
 class AFE_base:
 	"""
 	An abstraction class to make user interface.
@@ -256,6 +264,7 @@ class NAFE13388( AFE_base, SPI_target ):
 		self.coeff_microvolt	= [ 0 ] * 16
 		self.channel_delay		= [ 0 ] * 16
 		
+		self.rREG_DICT = {v: k for k, v in self.REG_DICT.items()}
 
 	def boot( self ):
 		"""
@@ -301,7 +310,7 @@ class NAFE13388( AFE_base, SPI_target ):
 		"""
 		for r in list:
 			if r:
-				print( "0x{:04X} = {:06X}".format( r, self.reg( r ) ) )
+				print( f"{self.rREG_DICT[ r ]} = {self.reg( r ):06X}" )
 			else:
 				print( "" )
 
@@ -357,7 +366,7 @@ class NAFE13388( AFE_base, SPI_target ):
 		delay_setting		= self.delays[ ch_delay ] / 4608000.00;
 		
 		if (28 < adc_data_rate) or (4 < adc_sinc) or ((adc_data_rate < 12) and adc_sinc):
-			return 0.00;
+			raise AFE_Error( "Logical channel setting error: adc_data_rate={adc_data_rate}, adc_sinc={adc_sinc}" )
 		
 		if not adc_normal_setting:
 			base_freq	/= adc_sinc + 1;
@@ -472,18 +481,7 @@ class NAFE13388( AFE_base, SPI_target ):
 		"""
 		reg	= self.REG_DICT[ reg ] if type( reg ) != int else reg
 
-		bit_width	= 24
-
-#		print( f"reg# = 0x{reg:04X}" )
-
-		if (((reg >> 4) & 0xF) < 0x4) or (((reg >> 4) & 0xF) == 0x7):
-			bit_width	= 16
-
-		if (((reg >> 4) & 0xF) < 0x2):
-			bit_width	= 0
-
-#		print( f"reg# = 0x{reg:04X} (w:{bit_width})" )
-
+		bit_width	= self.reg_bit_width( reg )
 
 		if (value is not None) or (bit_width == 0):
 			if bit_width == 24:
@@ -496,6 +494,50 @@ class NAFE13388( AFE_base, SPI_target ):
 			else:
 				return self.read_r16( reg, signed )
 	
+	def reg_bit_width( self, reg ):
+#		reg	= self.REG_DICT[ reg ] if type( reg ) != int else reg
+
+		bit_width	= 24
+
+		if (((reg >> 4) & 0xF) < 0x4) or (((reg >> 4) & 0xF) == 0x7):
+			bit_width	= 16
+
+		if (((reg >> 4) & 0xF) < 0x2):
+			bit_width	= 0
+
+		return bit_width
+	
+	def bit_operation( self, reg, target_bits, value ):
+		"""
+		register bit set/clear
+	
+		Parameters
+		----------
+		reg : string or int
+			Register name or register address/pointer.
+		target_bits : int
+			select target bits by setting its bit position 1
+		value : int
+			set/clear value.
+			The bits only set/cleared with same position at
+			1 in target_bits.
+			
+		Returns
+		-------
+		int : register value before modifying
+		int : register value after modifying
+
+		"""
+		rv	= self.reg( reg )
+		wv	= rv
+		
+		wv	&= ~(target_bits & ~value)
+		wv	|=  (target_bits &  value)
+
+		self.reg( reg, wv )
+		return rv, wv
+
+
 	def	write_r16( self, reg, val = None ):
 		"""
 		writing 16bit register
