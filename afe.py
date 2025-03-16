@@ -6,8 +6,9 @@ from	nxp_periph.interface	import	SPI_target
 from	nxp_periph.MikanUtil	import	MikanUtil
 import	os
 
-demo == "custom gain"
 #demo	= "continuous read"
+#demo 	= "custom gain"
+demo	= "self-calibration"
 #demo 	= "multichannel read"
 #demo 	= "single channel"
 
@@ -38,8 +39,19 @@ def main():
 
 	afe.info_logical_channel()
 
+	if demo == "continuous read":
+		afe.continuous_read_start()
 
-	if demo == "custom gain":
+		prev_count	= afe.cb_count
+
+		while True:
+			if prev_count != afe.cb_count:
+				afe.data	= [ v * afe.coeff_microvolt[ ch ] * 1e-6 for ch, v in enumerate( afe.data )]
+				print( f"{afe.data}" )
+				prev_count = afe.cb_count
+
+	'''
+	elif demo == "custom gain":
 	
 		INPUT_GND			= 0x0010;
 		INPUT_A1P_SINGLE	= 0x1710;
@@ -99,18 +111,26 @@ def main():
 
 			for v in data:
 				print( f"{v}, ", end = "" )
+	'''	
+	elif demo == "self-calibration":
+		reg_list	= [ afe.REG_DICT[ "GAIN_COEFF0" ] + i for i in range( 32 ) ]
+		coeff_list0	= afe.reg_dump( reg_list )
 
+		for i in range( 8 ):
+			afe.self_calibrate( i )
 
-	if demo == "continuous read":
-		afe.continuous_read_start()
+		coeff_list1	= afe.reg_dump( reg_list )
 
-		prev_count	= afe.cb_count
+		for p, n in zip( coeff_list0, coeff_list1 ):
+			print( f"{p[ 'name' ]:15} = {p[ 'value' ]:8} -> {n[ 'value' ]:8}" )
 
 		while True:
-			if prev_count != afe.cb_count:
-				afe.data	= [ v * afe.coeff_microvolt[ ch ] * 1e-6 for ch, v in enumerate( afe.data )]
-				print( f"{afe.data}" )
-				prev_count = afe.cb_count
+			data	= afe.read_V()
+
+			for v in data:
+				print( f"{v}, ", end = "" )
+			
+			print( f"" )
 			
 	elif demo == "multichannel read":
 		while True:
@@ -469,7 +489,81 @@ class NAFE13388( AFE_base, SPI_target ):
 		_, self.bitmap	= self.bit_operation( "CH_CONFIG4", bitmap, ~bitmap )
 		
 		self.num_logcal_ch, self.total_delay, self.enabled_ch_list	= self.total_channel_info()
+	
+	def self_calibrate( self, pga_gain_index, channel_selection = 15, input_select = 0, reference_source_voltage = 0, use_positive_side = True ):
+		low_gain_index	= 2
 		
+		##	if user doesn't specify the channel and voltage, use REFH or REFL
+		
+		if input_select == 0:
+			low_gain	= True if (pga_gain_index <= low_gain_index) else False
+
+			input_select				= 0x5 if low_gain else 0x6
+			reference_source_voltage	= (self.reg( "OPT_COEF1" if low_gain else "OPT_COEF2" ) * 5.00) / (1 << 24)
+
+			print( f"==== self-calibration for PGA gain setting: x{self.pga_gain[ pga_gain_index ]}" )
+			print( f"gain = {"low" if low_gain else "high"}",  )
+			print( f"REF[H|L] = {reference_source_voltage}V\r\n" )
+		
+		##	logical channel settings
+		##	Total 3 settings are prepared to measure reference_voltage, internal-GND and AICOM
+		
+		REF_GND		= 0x0011  | (pga_gain_index << 5)
+		REF_V		= (input_select << (12 if use_positive_side else 8)) | REF_GND
+		REF_COM		= 0x7700 | REF_GND
+		ch_config1	= (pga_gain_index << 12) | 0x00E4
+		ch_config2	= 0x8480
+		ch_config3	= 0x0000
+
+		refh	= [ REF_V,   ch_config1, ch_config2,           ch_config3 ]
+		refg	= [ REF_GND, ch_config1, ch_config2,           ch_config3 ]
+		refc	= [ REF_COM, ch_config1, ch_config2 & ~0x0080, ch_config3 ]	# CH_CHOP:off
+
+		##	forcing to set unity-gain and zero-offset
+
+		default_gain_coeff_value	= 0x1 << 22
+		default_offset_coeff_value	= 0
+
+		self.reg( self.REG_DICT["GAIN_COEFF0"]   + pga_gain_index, default_gain_coeff_value   )
+		self.reg( self.REG_DICT["OFFSET_COEFF0"] + pga_gain_index, default_offset_coeff_value )
+		
+		##	measure the logical channel with those different 3 settings
+		
+		self.open_logical_channel( channel_selection, refh )
+		data_REF	= self.read( channel_selection )
+
+		self.open_logical_channel( channel_selection, refg )
+		data_GND	= self.read( channel_selection )
+
+		self.open_logical_channel( channel_selection, refc )
+		data_COM	= self.read( channel_selection )
+
+		self.close_logical_channel( channel_selection )
+
+		##	calculation
+		
+		fullscale_voltage	= 5.00 / self.pga_gain[ pga_gain_index ]
+		calibrated_gain		= (0x1 << 23) * (reference_source_voltage / fullscale_voltage) / (data_REF - data_GND)
+
+		print( f"data_REF = {data_REF}" )
+		print( f"data_GND = {data_GND}" )
+		print( f"data_COM = {data_COM}" )
+		print( f"gain adjustment ratio = {calibrated_gain}" )
+		
+		if not ( (0.95 < calibrated_gain) and (calibrated_gain < 1.05) ):
+			raise AFE_Error( "Un-calibrated PGA gain is not in normal range" )
+
+		offset_mv	= data_COM * self.coeff_microvolt[ channel_selection ]
+						
+		if not ( (-10.0 < offset_mv) and (offset_mv < 10.0) ):
+			#raise AFE_Error( "Un-calibrated PGA offset is not in normal range" )
+			pass
+			
+		##	setting registers: GAIN_COEFF[n] and OFFSET_COEFF[n]
+		
+		self.reg( self.REG_DICT["GAIN_COEFF0"]   + pga_gain_index, round( default_gain_coeff_value * calibrated_gain ) )
+		self.reg( self.REG_DICT["OFFSET_COEFF0"] + pga_gain_index, round( default_offset_coeff_value + data_COM      ) )
+
 	def total_channel_info( self ):
 		ch		= 0
 		delay	= 0
@@ -482,7 +576,7 @@ class NAFE13388( AFE_base, SPI_target ):
 				list	+= [ i ]
 
 		return ch, delay, list
-
+	'''
 	def gain_offset_coeff( self, p1, p2 ):
 		pga1x_voltage		= 5.0
 		adc_resolution		= 24
@@ -499,7 +593,7 @@ class NAFE13388( AFE_base, SPI_target ):
 		custom_offset		= (dv_slope * ref.low.voltage - ref.low.data) / custom_gain;
 	
 		return	custom_gain, custom_offset
-
+	'''
 	def read_V( self, ch = None ):
 		if ch is not None:
 			return self.read( ch ) * self.coeff_microvolt[ ch ] * 1e-6
@@ -757,19 +851,19 @@ class NAFE13388( AFE_base, SPI_target ):
 		list : list
 			List of register address/pointer.
 		"""
-		for k, v in self.reg_dump( list ).items():
-			if k:
-				if 24 == v[ "width" ]:
-					print( f"{k:22} = {v[ 'value' ]:06X}" )
+		for i in self.reg_dump( list ):
+			if i[ "name" ]:
+				if 24 == i[ "width" ]:
+					print( f"{i[ 'name' ]:22} = {i[ 'value' ]:06X}" )
 				else:
-					print( f"{k:22} = {v[ 'value' ]:04X}" )
+					print( f"{i[ 'name' ]:22} = {i[ 'value' ]:04X}" )
 	
 	def info_logical_channel( self ):
 		print( f"info_logical_channel:" )
 
 		print( f"  enabled channels         = {self.num_logcal_ch}" )
 		print( f"  enabled channels bitmap  = {self.num_logcal_ch}" )
-		print( f"  total_delay              = {self.total_delay}" );
+		print( f"  total_delay              = {self.total_delay}" )
 
 		for i in range( 16 ):
 			if self.bitmap & (0x1 << i):
@@ -782,8 +876,8 @@ class NAFE13388( AFE_base, SPI_target ):
 		"""
 		self.reg( self.REG_DICT["CMD_CH0"] + logical_channel )
 
-		for k, v in self.reg_dump( self.ch_cnfg_reg ).items():
-			print( f"   {k}: 0x{v[ 'value' ]:04X}", end = "" )
+		for i in self.reg_dump( self.ch_cnfg_reg ):
+			print( f"   {i[ 'name' ]}: 0x{i[ 'value' ]:04X}", end = "" )
 		
 		print( "" )
 
@@ -798,7 +892,7 @@ class NAFE13388( AFE_base, SPI_target ):
 			List of register address/pointer.
 		"""
 		
-		data	= dict()
+		data	= []
 		
 		for r in list:
 			if r is None:
@@ -809,7 +903,7 @@ class NAFE13388( AFE_base, SPI_target ):
 				value		= self.reg( reg_addr )
 				width		= self.reg_bit_width( reg_addr )
 	
-			data[ reg_name ]	= { "value": value, "width": width }
+			data	+= [ { "name": reg_name, "value": value, "width": width } ]
 		
 		return data
 
