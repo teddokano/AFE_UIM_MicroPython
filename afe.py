@@ -7,8 +7,8 @@ from	nxp_periph.MikanUtil	import	MikanUtil
 import	os
 
 #demo	= "continuous read"
-demo	= "self-calibration"
-#demo 	= "multichannel read"
+#demo	= "self-calibration"
+demo 	= "multichannel read"
 #demo 	= "single channel"
 
 def main():
@@ -755,10 +755,9 @@ class NAFE13388( AFE_base, SPI_target ):
 		rv	= []
 	
 		for i in range( self.num_logcal_ch ):
-			chunk		 = data[ 1 + (3 * i) : 5 + (3 * i) ]
-			chunk[0]	 = 0
-
-			rv	+=[ unpack( ">l", chunk )[ 0 ] ]
+			chunk	= data[ 2 + (3 * i) : 5 + (3 * i) ]
+			chunk	= bytearray( list( chunk ) + [ 0 ] )
+			rv	+=[ unpack( ">l", chunk )[ 0 ] >> 8 ]
 
 		return rv
 
