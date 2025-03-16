@@ -10,7 +10,7 @@ WAIT	= 0.001
 CWAIT	= 0
 
 def main():
-	spi	= SPI( 0, 1000_000, cs = 0, phase = 1 )
+	spi	= SPI( 0, 1_000_000, cs = 0, phase = 1 )
 
 	afe	= NAFE13388( spi, None )
 	
@@ -23,9 +23,11 @@ def main():
 
 	count	= 0
 
-	sleep(0.5)
-	afe.logical_ch_config( 0, [ 0x1710, 0x00BC, 0x4C00, 0x0000 ] ),
-	afe.logical_ch_config( 1, [ 0x5710, 0x00BC, 0x4C00, 0x0000 ] ),
+#	afe.logical_ch_config( 0, [ 0x1710, 0x00BC, 0x4C00, 0x0000 ] )
+#	afe.logical_ch_config( 1, [ 0x5710, 0x00BC, 0x4C00, 0x0000 ] )
+
+	afe.logical_ch_config( 0, [ 0x1070, 0x3084, 0x2900, 0x0000 ] )
+	afe.logical_ch_config( 1, [ 0x2070, 0x3084, 0x2900, 0x0000 ] )
 
 	data	= [ 0 ] * 2
 
@@ -449,6 +451,7 @@ class NAFE13388( AFE_base, SPI_target ):
 			self.reg( self.REG_DICT["CMD_CH0"] + ch )
 			self.reg( "CMD_SS" )
 			sleep( self.channel_delay[ ch ] * self.delay_accuracy )
+#			sleep( 0.2 )
 			return self.reg( self.REG_DICT["CH_DATA0"] + ch )
 			
 		values	= []
