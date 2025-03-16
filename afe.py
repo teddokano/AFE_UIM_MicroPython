@@ -31,8 +31,16 @@ def main():
 
 	count	= 0
 
-	afe.logical_ch_config( 0, [ 0x1710, 0x00BC, 0x4C00, 0x0000 ] )
-	afe.logical_ch_config( 1, [ 0x5710, 0x00BC, 0x4C00, 0x0000 ] )
+	afe.open_logical_channel( 0, [ 0x1710, 0x00BC, 0x4C00, 0x0000 ] )
+	afe.open_logical_channel( 1, [ 0x5710, 0x00BC, 0x4C00, 0x0000 ] )
+	afe.open_logical_channel( 2, [ 0x0010, 0x00BC, 0x4C00, 0x0000 ] )
+	afe.open_logical_channel( 5, [ 0x7710, 0x00BC, 0x4C00, 0x0000 ] )
+
+	afe.close_logical_channel( 2 )
+
+	afe.open_logical_channel( 5, [ 0x7710, 0x00BC, 0x4C00, 0x0000 ] )
+
+	afe.info_logical_channel()
 
 	data	= [ 0 ] * 2
 
@@ -306,19 +314,52 @@ class NAFE13388( AFE_base, SPI_target ):
 		list : list
 			List of register address/pointer.
 		"""
+		for k, v in self.reg_dump( list ).items():
+			if k:
+				if 24 == v[ "width" ]:
+					print( f"{k:22} = {v[ 'value' ]:06X}" )
+				else:
+					print( f"{k:22} = {v[ 'value' ]:04X}" )
+	
+	def cc_dump( self, logical_channel ):
+		"""
+		Channel configuration register dump
+		"""
+		self.reg( self.REG_DICT["CMD_CH0"] + logical_channel )
+
+		for k, v in self.reg_dump( self.ch_cnfg_reg ).items():
+			print( f"   {k}: 0x{v[ 'value' ]:04X}", end = "" )
+		
+		print( "" )
+
+		
+	def reg_dump( self, list ):
+		"""
+		Register dump
+
+		Parameters
+		----------
+		list : list
+			List of register address/pointer.
+		"""
+		
+		data	= dict()
+		
 		for r in list:
 			if r is None:
-				print( "" )
+				reg_name	= None
 			else:
 				reg_addr	= self.REG_DICT[  r ] if type( r ) != int else r
 				reg_name	= self.rREG_DICT[ r ] if type( r ) == int else r
+				value		= self.reg( reg_addr )
+				width		= self.reg_bit_width( reg_addr )
+	
+			data[ reg_name ]	= { "value": value, "width": width }
 		
-				if 24 == self.reg_bit_width( reg_addr ):
-					print( f"{reg_name:22} = {self.reg( reg_addr ):06X}" )
-				else:
-					print( f"{reg_name:22} = {self.reg( reg_addr ):04X}" )
+		return data
 
-	def logical_ch_config( self, logical_channel, list ):
+
+	def open_logical_channel( self, logical_channel, list ):
 		"""
 		Logical channel configuration
 
@@ -328,31 +369,14 @@ class NAFE13388( AFE_base, SPI_target ):
 			List of register values for register 0x20, 0x21, 0x22 and 0x23
 			
 		"""
-
-		print(  "" )
-		print( f"logical_ch_config for {logical_channel}" )
-
 		self.reg( self.REG_DICT["CMD_CH0"] + logical_channel )
 
 		for r, v in zip( self.ch_cnfg_reg, list ):
 			self.reg( r, v )
 			
-		self.dump( self.ch_cnfg_reg )
-		
-		mask	= 1
-		bits	= self.reg( "CH_CONFIG4" ) | mask << logical_channel
-		self.reg( "CH_CONFIG4", bits )
-		
-		self.num_logcal_ch	= 0
-		
-		for i in range( 16 ):
-			if bits & (mask << i):
-				self.num_logcal_ch	+= 1
-		
-		print( f"bits                     = {bits}" )
-		print( f"self.reg( 'CH_CONFIG4' ) = {self.reg( 'CH_CONFIG4' )}" )
-		print( f"self.num_logcal_ch       = {self.num_logcal_ch}" )
-		
+		bit	= 1 << logical_channel		
+		_, self.bitmap	= self.bit_operation( "CH_CONFIG4", bit, bit )
+
 		cc0	= list[ 0 ]
 		
 		if cc0 & 0x0010:
@@ -360,30 +384,60 @@ class NAFE13388( AFE_base, SPI_target ):
 		else:
 			self.coeff_microvolt[ logical_channel ]	= (4.0 / (1 << 24)) * 1e6;
 		
-		adc_data_rate		= (list[ 1 ] >>  3) & 0x001F;
-		adc_sinc			= (list[ 1 ] >>  0) & 0x0007;
-		ch_delay			= (list[ 2 ] >> 10) & 0x003F;
-		adc_normal_setting	= (list[ 2 ] >>  9) & 0x0001;
-		ch_chop				= (list[ 2 ] >>  7) & 0x0001;
+		base_freq, delay_setting	= self.freq_and_delay( list[ 1 ], list[ 2 ] )
 		
-		base_freq			= self.data_rates[ adc_data_rate ];
-		delay_setting		= self.delays[ ch_delay ] / 4608000.00;
+		self.channel_delay[ logical_channel ]	= (1 / base_freq) + delay_setting
+		self.num_logcal_ch, self.total_delay	= self.total_channel_info()
+
+	def freq_and_delay( self, cc1, cc2 ):
+		adc_data_rate		= (cc1 >>  3) & 0x001F
+		adc_sinc			= (cc1 >>  0) & 0x0007
+		ch_delay			= (cc2 >> 10) & 0x003F
+		adc_normal_setting	= (cc2 >>  9) & 0x0001
+		ch_chop				= (cc2 >>  7) & 0x0001
 		
+		base_freq			= self.data_rates[ adc_data_rate ]
+		delay_setting		= self.delays[ ch_delay ] / 4608000.00
+
 		if (28 < adc_data_rate) or (4 < adc_sinc) or ((adc_data_rate < 12) and adc_sinc):
 			raise AFE_Error( "Logical channel setting error: adc_data_rate={adc_data_rate}, adc_sinc={adc_sinc}" )
 		
 		if not adc_normal_setting:
-			base_freq	/= adc_sinc + 1;
+			base_freq	/= adc_sinc + 1
 		
 		if ch_chop:
-			base_freq	/= 2;
+			base_freq	/= 2
 
-		self.channel_delay[ logical_channel ]	= (1 / base_freq) + delay_setting
+		return base_freq, delay_setting
 		
-		print( f"base_freq     = {base_freq}",  );
-		print( f"delay_setting = {delay_setting}" );
-		print( f"total delay   = {self.channel_delay[ logical_channel ]}" );
+	def close_logical_channel( self, logical_channel ):
+		bitmap	= 1 << logical_channel		
+		_, self.bitmap	= self.bit_operation( "CH_CONFIG4", bitmap, ~bitmap )
+		
+		self.num_logcal_ch, self.total_delay	= self.total_channel_info()
+		
+	def total_channel_info( self ):
+		ch		= 0
+		delay	= 0
 
+		for i in range( 16 ):
+			if self.bitmap & (0x1 << i):
+				ch		+= 1
+				delay	+= self.channel_delay[ i ]
+
+		return ch, delay
+
+	def info_logical_channel( self ):
+		print( f"info_logical_channel:" )
+
+		print( f"  enabled channels         = {self.num_logcal_ch}" )
+		print( f"  enabled channels bitmap  = {self.num_logcal_ch}" )
+		print( f"  total_delay              = {self.total_delay}" );
+
+		for i in range( 16 ):
+			if self.bitmap & (0x1 << i):
+				print( f"  logical channel {i:2} = ", end = "" )
+				self.cc_dump( i )
 
 	def measure( self, ch = None ):
 		"""
@@ -449,6 +503,7 @@ class NAFE13388( AFE_base, SPI_target ):
 			sleep( self.channel_delay[ ch ] * self.delay_accuracy )
 			return self.reg( self.REG_DICT["CH_DATA0"] + ch )
 			
+		self.reg( "CMD_MS" )
 		values	= []
 
 		for i in range( self.num_logcal_ch ):
