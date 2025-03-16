@@ -37,6 +37,12 @@ def main():
 
 	afe.info_logical_channel()
 
+	afe.continuous_read_start()
+
+	while True:
+		print( f"{afe.data}" )
+		sleep( 0.5 )
+
 	while True:
 		data	= afe.read_V()
 
@@ -271,11 +277,13 @@ class NAFE13388( AFE_base, SPI_target ):
 		###	For UIM
 		self.reset_pin	= Pin( "D7", Pin.OUT )
 		self.syn_pin	= Pin( "D6", Pin.OUT )
-
+		'''
 		if "MIMXRT105" in os.uname().machine:
 			self.drdy_pin	= Pin( "D0", Pin.IN  )
 		else:
 			self.drdy_pin	= Pin( "D4", Pin.IN  )
+		'''
+		self.drdy_pin	= Pin( "D0", Pin.IN  )
 			
 		if "MIMXRT101" not in os.uname().machine:
 			self.int_pin	= Pin( "D3", Pin.IN  )
@@ -292,13 +300,21 @@ class NAFE13388( AFE_base, SPI_target ):
 		self.rREG_DICT = {v: k for k, v in self.REG_DICT.items()}
 		
 		self.drdy_flag	= False
-		
+	
+	def continuous_read_start( self ):
+		self.bit_operation( "SYS_CONFIG0", 0x0010, 0x0010 )
 		self.drdy_pin.irq( trigger = Pin.IRQ_RISING, handler = self.drdy_callback )
+
+		self.data	= []
+
+		self.drdy_flag	= False
+		self.reg( "CMD_MC" )
+
+	def continuous_read_cb( self, _ ):
+		self.data	= self.burst_read()
 		
 	def drdy_callback( self, p ):
-		self.drdy_flag	= True
-
-#		schedule( self. )
+		schedule( self.continuous_read_cb, 0 )
 
 	def reset( self, hardware_reset = False ):
 		"""
@@ -395,22 +411,6 @@ class NAFE13388( AFE_base, SPI_target ):
 				list	+= [ i ]
 
 		return ch, delay, list
-
-	def continuous_read( self, callback ):
-		self.bit_operation( "SYS_CONFIG0", 0x0010, 0x0010 )
-
-		self.data	= []
-
-		self.drdy_flag	= False
-		self.reg( "CMD_MC" )
-
-		while True:
-			if self.drdy_flag:
-				self.drdy_flag	= False
-				
-				for n in self.enabled_ch_list:
-					self.data	+= [ self.reg( self.REG_DICT["CH_DATA0"] + n ) ]
-
 
 	def read_V( self, ch = None ):
 		if ch is not None:
